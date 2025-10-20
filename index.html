@@ -41,6 +41,7 @@
     .dot{width:10px;height:10px;border-radius:50%}
     .dot.ev{background:#22c55e}
     .dot.ed{background:#3b82f6}
+    .dot.both{background:#8b5cf6}
     .footer{font-size:12px;color:var(--muted);padding:10px 0}
     .list{max-height:52vh;overflow:auto}
     .kicker{font-size:12px;color:#7ea9ff}
@@ -59,6 +60,7 @@
   <div class="legend">
     <span class="dot ev"></span><span class="muted">Early Voting</span>
     <span class="dot ed"></span><span class="muted">Election Day</span>
+    <span class="dot both"></span><span class="muted">Both</span>
   </div>
 </header>
 <div id="app">
@@ -120,7 +122,15 @@ const COALESCE_KEYS = {
 
 function lowerKeys(obj){ const out = {}; for (const k in obj){ out[k.toLowerCase().trim()] = obj[k]; } return out; }
 function get(row, keys){ for (const k of keys){ const v = row[k]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim(); } return ''; }
-function normalizeType(raw){ const v = String(raw||'').toLowerCase(); const hasEarly=/(^|\b)(early|ev)(\b|$)/.test(v); const hasEDay=/(election\s*day|eday|e\s*day|^ed$)/.test(v); if (hasEarly&&hasEDay) return 'Both'; if (hasEarly) return 'Early Voting'; if (hasEDay) return 'Election Day'; return 'Election Day'; }
+function normalizeType(raw){
+  const v = String(raw||'').toLowerCase();
+  const hasEarly = /(^|\\b)(early|ev)(\\b|$)/.test(v);
+  const hasEDay = /(election\\s*day|eday|e\\s*day|^ed$)/.test(v);
+  if (hasEarly && hasEDay) return 'Both';
+  if (hasEarly) return 'Early Voting';
+  if (hasEDay) return 'Election Day';
+  return 'Election Day';
+}
 
 function featureFromRow(r, id){
   const row = lowerKeys(r);
@@ -138,7 +148,11 @@ function featureFromRow(r, id){
   const end = get(row, COALESCE_KEYS.end);
   const notes = get(row, COALESCE_KEYS.notes);
   if (isNaN(lat) || isNaN(lng)) return null;
-  return { type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] }, properties:{ id, name, address, city, zip, type, hoursGeneric, hoursEv, hoursEd, start, end, notes } };
+  return {
+    type:'Feature',
+    geometry:{ type:'Point', coordinates:[lng,lat] },
+    properties:{ id, name, address, city, zip, type, hoursGeneric, hoursEv, hoursEd, start, end, notes }
+  };
 }
 
 // ===== MAP INIT =====
@@ -157,25 +171,36 @@ let voterPoint = null; // Turf point of voter address
 function initLayers(){
   if (map.getSource('sites')){ map.getSource('sites').setData(sitesFC); return; }
   map.addSource('sites', { type:'geojson', data: sitesFC });
-  // Use icon-only pins (no text labels)
+
+  // EV pins
   map.addLayer({
     id:'sites-ev', type:'symbol', source:'sites',
     filter:['==',['get','type'],'Early Voting'],
     layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
     paint:{ 'icon-color':'#22c55e' }
   });
+
+  // ED pins
   map.addLayer({
     id:'sites-ed', type:'symbol', source:'sites',
     filter:['==',['get','type'],'Election Day'],
     layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
     paint:{ 'icon-color':'#3b82f6' }
   });
-  map.on('click','sites-ev', (e)=> showPopup(e));
-  map.on('click','sites-ed', (e)=> showPopup(e));
-  map.on('mouseenter','sites-ev', ()=> map.getCanvas().style.cursor='pointer');
-  map.on('mouseenter','sites-ed', ()=> map.getCanvas().style.cursor='pointer');
-  map.on('mouseleave','sites-ev', ()=> map.getCanvas().style.cursor='');
-  map.on('mouseleave','sites-ed', ()=> map.getCanvas().style.cursor='');
+
+  // BOTH pins (single pin when site serves both periods)
+  map.addLayer({
+    id:'sites-both', type:'symbol', source:'sites',
+    filter:['==',['get','type'],'Both'],
+    layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
+    paint:{ 'icon-color':'#8b5cf6' } // purple
+  });
+
+  ['sites-ev','sites-ed','sites-both'].forEach(id=>{
+    map.on('click', id, (e)=> showPopup(e));
+    map.on('mouseenter', id, ()=> map.getCanvas().style.cursor='pointer');
+    map.on('mouseleave', id, ()=> map.getCanvas().style.cursor='');
+  });
 }
 if (map.loaded()) { initLayers(); } else { map.on('load', initLayers); }
 
@@ -186,23 +211,10 @@ Papa.parse(CONFIG.DATA_URL, {
   complete: (res) => {
     const feats = [];
     (res.data||[]).forEach((r,i)=>{
-      const base = featureFromRow(r, i+1);
-      if (!base) return;
-      const p = base.properties;
-      const makeWithHours = (type)=>{
-        const f = JSON.parse(JSON.stringify(base));
-        f.properties.type = type;
-        if (type === 'Early Voting' && p.hoursEv){ f.properties.hours = p.hoursEv; }
-        else if (type === 'Election Day' && p.hoursEd){ f.properties.hours = p.hoursEd; }
-        else { f.properties.hours = p.hoursGeneric; }
-        return f;
-      };
-      if (p.type === 'Both'){
-        feats.push(makeWithHours('Early Voting'));
-        feats.push(makeWithHours('Election Day'));
-      } else {
-        feats.push(makeWithHours(p.type));
-      }
+      const f = featureFromRow(r, i+1);
+      if (!f) return;
+      // Keep a single feature even if site serves both periods
+      feats.push(f);
     });
     sitesFC.features = feats;
     if (map.getSource('sites')) map.getSource('sites').setData(sitesFC);
@@ -216,82 +228,151 @@ function showPopup(e){
   const f = e.features[0];
   const p = f.properties;
   const name = p.name || 'Polling location';
-  const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
-  const typeLabel = p.type || '';
-  const hours = p.hours ? `Hours: ${p.hours}` : '';
-  const notes = p.notes ? p.notes : '';
-  const dist = voterPoint ? `Distance: ${formatDist(distanceFromVoter(f))}` : '';
-  const dest = encodeURIComponent([(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', '));
+  const line2 = [(p.address||''),(p.city||''),(p.zip||'')]
+                  .filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
+
+  const hoursLines = [];
+  if (p.type === 'Both'){
+    if (p.hoursEv) hoursLines.push(`<div>Early Voting: ${p.hoursEv}</div>`);
+    if (p.hoursEd) hoursLines.push(`<div>Election Day: ${p.hoursEd}</div>`);
+    if (!hoursLines.length && p.hoursGeneric) hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
+  } else if (p.hours) {
+    hoursLines.push(`<div>Hours: ${p.hours}</div>`);
+  } else if (p.hoursGeneric){
+    hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
+  }
+
+  const notes = p.notes ? `<div class="muted" style="margin-top:4px">${p.notes}</div>` : '';
+  const dist  = voterPoint ? `<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>` : '';
+  const dest  = encodeURIComponent(line2);
+
   const html = `
     <strong>${name}</strong><br/>
     ${line2 || ''}<br/>
-    <span class="muted">${typeLabel}</span><br/>
-    ${hours ? `<div style="margin-top:4px">${hours}</div>`:''}
-    ${notes ? `<div class="muted" style="margin-top:4px">${notes}</div>`:''}
-    ${dist ? `<div class="dist" style="margin-top:6px">${dist}</div>`:''}
+    <span class="muted">${p.type}</span>
+    ${hoursLines.length ? hoursLines.join('') : ''}
+    ${notes}
+    ${dist}
     <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Get Directions</a></div>
   `;
-  new mapboxgl.Popup({ offset: 12, className:'light-popup' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+  new mapboxgl.Popup({ offset: 12, className:'light-popup' })
+    .setLngLat(e.lngLat)
+    .setHTML(html)
+    .addTo(map);
 }
 
-function fitToData(){ if (!sitesFC.features.length) return; const b = turf.bbox(sitesFC); map.fitBounds(b, { padding: 40, maxZoom: 12 }); }
+function fitToData(){
+  if (!sitesFC.features.length) return;
+  const b = turf.bbox(sitesFC);
+  map.fitBounds(b, { padding: 40, maxZoom: 12 });
+}
 
 // ===== ADDRESS & FILTER UI =====
 const addrInput = document.getElementById('addr');
 document.getElementById('locate').onclick = ()=> locateAddress(addrInput.value);
-document.getElementById('clear').onclick = ()=> { addrInput.value=''; voterPoint=null; if (map.getSource('voter')) { map.removeLayer('voter'); map.removeSource('voter'); } renderSites(); };
+document.getElementById('clear').onclick = ()=> {
+  addrInput.value=''; voterPoint=null;
+  if (map.getSource('voter')) { map.removeLayer('voter'); map.removeSource('voter'); }
+  renderSites();
+};
 
 geocoder.on('result', (ev)=>{ const { center, place_name } = ev.result; addrInput.value = place_name; setVoterPoint(center[0], center[1]); });
 function locateAddress(text){ if (!text) return alert('Enter an address'); geocoder.query(text); }
-function setVoterPoint(lng, lat){ voterPoint = turf.point([lng, lat]); const geo={ type:'FeatureCollection', features:[{ type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] } }] }; if (!map.getSource('voter')){ map.addSource('voter',{ type:'geojson', data:geo }); map.addLayer({ id:'voter', type:'circle', source:'voter', paint:{ 'circle-radius':8,'circle-color':'#ffd166','circle-stroke-color':'#0b1020','circle-stroke-width':1 } }); } else { map.getSource('voter').setData(geo); } map.flyTo({ center:[lng,lat], zoom: 12 }); renderSites(); }
+function setVoterPoint(lng, lat){
+  voterPoint = turf.point([lng, lat]);
+  const geo = { type:'FeatureCollection', features:[{ type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] } }] };
+  if (!map.getSource('voter')){
+    map.addSource('voter',{ type:'geojson', data:geo });
+    map.addLayer({ id:'voter', type:'circle', source:'voter',
+      paint:{ 'circle-radius':8,'circle-color':'#ffd166','circle-stroke-color':'#0b1020','circle-stroke-width':1 } });
+  } else {
+    map.getSource('voter').setData(geo);
+  }
+  map.flyTo({ center:[lng,lat], zoom: 12 });
+  renderSites();
+}
 
 const evChk = document.getElementById('filter-ev');
 const edChk = document.getElementById('filter-ed');
 evChk.onchange = edChk.onchange = ()=> renderSites();
 
-function filteredSites(){ let feats = sitesFC.features.slice(); if (!evChk.checked) feats = feats.filter(f => f.properties.type !== 'Early Voting'); if (!edChk.checked) feats = feats.filter(f => f.properties.type !== 'Election Day'); return feats; }
+function filteredSites(){
+  const feats = sitesFC.features.slice();
+  const wantEV = evChk.checked;
+  const wantED = edChk.checked;
+  if (!wantEV && !wantED) return [];
+  return feats.filter(f => {
+    const t = f.properties.type;
+    if (t === 'Early Voting') return wantEV;
+    if (t === 'Election Day') return wantED;
+    if (t === 'Both') return (wantEV || wantED);
+    return false;
+  });
+}
 function distanceFromVoter(feature){ if (!voterPoint) return null; return turf.distance(voterPoint, feature, { units: 'miles' }); }
 function formatDist(mi){ if (mi === null) return ''; return mi < 10 ? `${mi.toFixed(2)} mi` : `${mi.toFixed(1)} mi`; }
 
 function renderSites(){
   const feats = filteredSites();
   const list = document.getElementById('list');
+
+  // Update map layer visibility
+  if (map.getLayer('sites-ev'))   map.setLayoutProperty('sites-ev','visibility', evChk.checked ? 'visible':'none');
+  if (map.getLayer('sites-ed'))   map.setLayoutProperty('sites-ed','visibility', edChk.checked ? 'visible':'none');
+  if (map.getLayer('sites-both')) map.setLayoutProperty('sites-both','visibility', (evChk.checked || edChk.checked) ? 'visible':'none');
+
+  // Sort by distance if we have an address
+  let sorted = feats;
+  if (voterPoint){ sorted = feats.slice().sort((a,b)=> distanceFromVoter(a) - distanceFromVoter(b)); }
+
+  // De-duplicate by site id so “Both” shows only once
+  const seen = new Set();
+  sorted = sorted.filter(f => { const id = f.properties.id; if (seen.has(id)) return false; seen.add(id); return true; });
+
+  // Update count to reflect de-dup list length
   const countEl = document.getElementById('count');
-  countEl.textContent = feats.length;
-
-  if (map.getLayer('sites-ev')) map.setLayoutProperty('sites-ev','visibility', evChk.checked ? 'visible':'none');
-  if (map.getLayer('sites-ed')) map.setLayoutProperty('sites-ed','visibility', edChk.checked ? 'visible':'none');
-
-  let sorted = feats; if (voterPoint){ sorted = feats.slice().sort((a,b)=> distanceFromVoter(a) - distanceFromVoter(b)); }
+  countEl.textContent = sorted.length;
 
   list.innerHTML = '';
   sorted.forEach(f => {
     const p = f.properties;
     const d = voterPoint ? formatDist(distanceFromVoter(f)) : '';
     const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ');
-    const el = document.createElement('div'); el.className = 'site';
+
+    const hoursBlock = (p.type === 'Both')
+      ? `${p.hoursEv?`<div>Early Voting: ${p.hoursEv}</div>`:''}`
+        + `${p.hoursEd?`<div>Election Day: ${p.hoursEd}</div>`:''}`
+        + `${(!p.hoursEv && !p.hoursEd && p.hoursGeneric)?`<div>Hours: ${p.hoursGeneric}</div>`:''}`
+      : `${p.hours?`<div>Hours: ${p.hours}</div>`: (p.hoursGeneric?`<div>Hours: ${p.hoursGeneric}</div>`:'')}`;
+
+    const el = document.createElement('div');
+    el.className = 'site';
+    el.setAttribute('data-siteid', p.id);
     el.innerHTML = `
       <h3>${p.name || 'Polling location'}</h3>
       <div>${line2}</div>
       <div class="muted">${p.type}${d?` · <span class="dist">${d}</span>`:''}</div>
-      ${p.hours?`<div>Hours: ${p.hours}</div>`:''}
+      ${hoursBlock}
       ${p.notes?`<div class="muted">${p.notes}</div>`:''}
       <div class="btn-row" style="margin-top:6px">
         <a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(line2)}">Directions</a>
         <button data-jump>Zoom</button>
       </div>
     `;
-    el.querySelector('button[data-jump]').onclick = ()=> { map.flyTo({ center: f.geometry.coordinates, zoom: 14 }); showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } }); };
+    el.querySelector('button[data-jump]').onclick = ()=> {
+      map.flyTo({ center: f.geometry.coordinates, zoom: 14 });
+      showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } });
+    };
     list.appendChild(el);
   });
 }
 </script>
 
 <!--
-CSV TIP: For sites open both periods, add optional columns:
-- hours_ev (or ev_hours, early_hours)
-- hours_ed (or ed_hours, eday_hours)
-Keep a generic 'hours' column for sites with a single period.
+CSV TIP:
+- For sites with BOTH periods, keep one row, set type to "both" (or “early and e day”), and add:
+  hours_ev, hours_ed
+- For sites with a single period, either fill "hours" or the one appropriate hours_* column.
 -->
 </body>
 </html>
