@@ -1,3 +1,3 @@
-Name,Address,City,Zip,lat,lng,type,hours,start_date,end_date,accessible,notes
+name,address,city,zip,lat,lng,type,hours,start_date,end_date,accessible,notes
 Pat Bryson Municipal Hall,201 N Brushy St,Leander,78641,30.57935,-97.85455,early and e day,7-7,Oct 20,Nov 4,yes,council chambers
 Cedar Park Recreation Center,1435 Main St,Cedar Park,78613,30.52695,-97.82585,early and e day,7-8,Oct 21,Nov 5,yes,community room
