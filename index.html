@@ -124,8 +124,8 @@ function lowerKeys(obj){ const out = {}; for (const k in obj){ out[k.toLowerCase
 function get(row, keys){ for (const k of keys){ const v = row[k]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim(); } return ''; }
 function normalizeType(raw){
   const v = String(raw||'').toLowerCase();
-  const hasEarly = /(^|\\b)(early|ev)(\\b|$)/.test(v);
-  const hasEDay = /(election\\s*day|eday|e\\s*day|^ed$)/.test(v);
+  const hasEarly = /(^|\b)(early|ev)(\b|$)/.test(v);
+  const hasEDay = /(election\s*day|eday|e\s*day|^ed$)/.test(v);
   if (hasEarly && hasEDay) return 'Both';
   if (hasEarly) return 'Early Voting';
   if (hasEDay) return 'Election Day';
