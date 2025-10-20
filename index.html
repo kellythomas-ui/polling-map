@@ -21,6 +21,7 @@
     header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1e2641;background:linear-gradient(180deg,#0d1430,#0b1020)}
     header h1{font-size:18px;margin:0;font-weight:650}
     #app{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 58px)}
+    main{position:relative; min-height:calc(100vh - 58px);}
     @media (max-width: 920px){#app{grid-template-columns:1fr;grid-template-rows:420px 1fr}}
     #sidebar{background:var(--card);border-right:1px solid #1e2641;padding:12px 12px 0;overflow:auto}
     .panel{background:#0e1530;border:1px solid #1e2641;border-radius:14px;padding:12px;margin-bottom:12px}
@@ -30,7 +31,7 @@
     input[type="text"]{width:100%;padding:10px;border-radius:10px;border:1px solid #243056;background:#0b132c;color:var(--text)}
     select,button{padding:9px 12px;border-radius:10px;border:1px solid #243056;background:#0b132c;color:var(--text);cursor:pointer}
     button.primary{background:#153a6b;border-color:#2a60a4}
-    #map{width:100%;height:100%}
+    #map{position:absolute; inset:0; width:100%; height:100%; min-height:400px;}
     .site{border-top:1px solid #1e2641;padding:10px 4px}
     .site:first-child{border-top:none}
     .site h3{margin:0 0 4px 0;font-size:15px}
@@ -46,7 +47,7 @@
     .btn-row{display:flex;gap:8px;flex-wrap:wrap}
     a.btn{display:inline-block;text-decoration:none}
     /* Popup styling for Option A (light popup) */
-    .mapboxgl-popup-content.light-popup { color: #111; background: #fff; border-radius: 8px; font-size: 14px; }
+    .mapboxgl-popup.light-popup .mapboxgl-popup-content { color: #111; background: #fff; border-radius: 8px; font-size: 14px; }
     .mapboxgl-popup-tip { border-top-color: #fff !important; }
   </style>
 </head>
