@@ -4,60 +4,317 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Polling Place Finder</title>
+  <!-- Mapbox GL JS -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css" rel="stylesheet" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
+  <!-- Mapbox Geocoder -->
   <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.1.0/mapbox-gl-geocoder.css" type="text/css" />
   <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.1.0/mapbox-gl-geocoder.min.js"></script>
+  <!-- Turf.js for distance/nearest -->
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+  <!-- Papa Parse for CSV loading -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
-    body{margin:0;font-family:system-ui;background:#0b1020;color:#fff}
-    #map{position:absolute;top:0;bottom:0;width:100%}
+    :root { --bg:#0b1020; --card:#11162a; --text:#f4f6fa; --muted:#9aa3b2; --accent:#79b8ff; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1e2641;background:linear-gradient(180deg,#0d1430,#0b1020)}
+    header h1{font-size:18px;margin:0;font-weight:650}
+    #app{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 58px)}
+    @media (max-width: 920px){#app{grid-template-columns:1fr;grid-template-rows:420px 1fr}}
+    #sidebar{background:var(--card);border-right:1px solid #1e2641;padding:12px 12px 0;overflow:auto}
+    .panel{background:#0e1530;border:1px solid #1e2641;border-radius:14px;padding:12px;margin-bottom:12px}
+    .row{display:flex;gap:8px;align-items:center}
+    .row.wrap{flex-wrap:wrap}
+    label{font-size:13px;color:var(--muted)}
+    input[type="text"]{width:100%;padding:10px;border-radius:10px;border:1px solid #243056;background:#0b132c;color:var(--text)}
+    select,button{padding:9px 12px;border-radius:10px;border:1px solid #243056;background:#0b132c;color:var(--text);cursor:pointer}
+    button.primary{background:#153a6b;border-color:#2a60a4}
+    .badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid #2b3a66;color:#c7d2ff;background:#101a3a}
+    #map{width:100%;height:100%}
+    .site{border-top:1px solid #1e2641;padding:10px 4px}
+    .site:first-child{border-top:none}
+    .site h3{margin:0 0 4px 0;font-size:15px}
+    .muted{color:var(--muted)}
+    .dist{font-variant-numeric:tabular-nums}
+    .legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .dot{width:10px;height:10px;border-radius:50%}
+    .dot.ev{background:#4ad97d}
+    .dot.ed{background:#34b3ff}
+    .footer{font-size:12px;color:var(--muted);padding:10px 0}
+    .list{max-height:52vh;overflow:auto}
+    .kicker{font-size:12px;color:#7ea9ff}
+    .btn-row{display:flex;gap:8px;flex-wrap:wrap}
+    a.btn{display:inline-block;text-decoration:none}
+    .hidden{display:none}
   </style>
 </head>
 <body>
-<div id="map"></div>
+<header>
+  <h1>Find a place to vote</h1>
+  <div class="legend">
+    <span class="dot ev"></span><span class="muted">Early Voting</span>
+    <span class="dot ed"></span><span class="muted">Election Day</span>
+  </div>
+</header>
+<div id="app">
+  <aside id="sidebar">
+    <div class="panel">
+      <div class="kicker">Step 1</div>
+      <label for="addr">Enter your address</label>
+      <div id="geocoder" class="mb-2" style="margin-top:6px"></div>
+      <input id="addr" type="text" placeholder="Or type an address and press Locate" />
+      <div class="btn-row" style="margin-top:8px">
+        <button id="locate" class="primary">Locate</button>
+        <button id="clear">Clear</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="kicker">Step 2</div>
+      <div class="row wrap" style="gap:6px 10px">
+        <label><input type="checkbox" id="filter-ev" checked> Early Voting</label>
+        <label><input type="checkbox" id="filter-ed" checked> Election Day</label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <strong>Nearest locations</strong>
+        <span class="muted" id="count">0</span>
+      </div>
+      <div class="list" id="list"></div>
+      <div class="footer">Locations change by election. Confirm before you go.</div>
+    </div>
+  </aside>
+  <main><div id="map"></div></main>
+</div>
+
 <script>
+/********************
+ * CONFIG — EDIT ME *
+ ********************/
 const CONFIG = {
   MAPBOX_TOKEN: "pk.eyJ1Ijoia2VsbGF0aG9tYXMiLCJhIjoiY21nemtreGM5MHNuYzJqcTRwMzUwaWNrcCJ9.OJKWNpnTc_iFxD2ARuwJ5Q",
-  DATA_URL: "sites.csv"
+  DATA_URL: "sites.csv", // CSV file path in same folder
+  // Column names expected in CSV (case-sensitive)
+  COLUMNS: {
+    name: "name",
+    address: "address",
+    city: "city",
+    zip: "zip",
+    lat: "lat",
+    lng: "lng",
+    type: "type",           // "Early Voting" or "Election Day"
+    hours: "hours",         // free text shown in UI
+    start: "start_date",    // optional (YYYY-MM-DD)
+    end: "end_date",        // optional (YYYY-MM-DD)
+    notes: "notes",         // optional free text
+    accessible: "accessible" // optional e.g., "Yes"/"No" or details
+  }
 };
 
+/****************
+ * MAP + LAYERS *
+ ****************/
 mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
   container: 'map',
   style: 'mapbox://styles/mapbox/streets-v12',
-  center: [-98.5, 29.4],
+  center: [-98.5, 29.4], // Texas-ish default; adjust
   zoom: 8
 });
+map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
+// Geocoder UI (Mapbox)
+const geocoder = new MapboxGeocoder({ accessToken: mapboxgl.accessToken, mapboxgl, marker: false, placeholder: '123 Main St, City, TX' });
+const geocoderEl = document.getElementById('geocoder');
+geocoder.addTo(geocoderEl);
+
+let sitesFC = { type: 'FeatureCollection', features: [] };
+let voterPoint = null; // Turf point of voter address
+
+// Load CSV
 Papa.parse(CONFIG.DATA_URL, {
   download: true,
   header: true,
   dynamicTyping: true,
   complete: (res) => {
-    const features = res.data.map(r => ({
+    const rows = res.data.filter(r => r[CONFIG.COLUMNS.lat] && r[CONFIG.COLUMNS.lng]);
+    sitesFC.features = rows.map((r, i) => ({
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: [Number(r.lng), Number(r.lat)] },
-      properties: r
+      geometry: { type: 'Point', coordinates: [Number(r[CONFIG.COLUMNS.lng]), Number(r[CONFIG.COLUMNS.lat])] },
+      properties: {
+        id: i+1,
+        name: r[CONFIG.COLUMNS.name],
+        address: r[CONFIG.COLUMNS.address],
+        city: r[CONFIG.COLUMNS.city] || '',
+        zip: r[CONFIG.COLUMNS.zip] || '',
+        type: (r[CONFIG.COLUMNS.type]||'').trim(),
+        hours: r[CONFIG.COLUMNS.hours] || '',
+        start: r[CONFIG.COLUMNS.start] || '',
+        end: r[CONFIG.COLUMNS.end] || '',
+        notes: r[CONFIG.COLUMNS.notes] || '',
+        accessible: r[CONFIG.COLUMNS.accessible] || ''
+      }
     }));
-
-    map.on('load', () => {
-      map.addSource('sites', { type: 'geojson', data: { type: 'FeatureCollection', features } });
-      map.addLayer({
-        id: 'sites',
-        type: 'circle',
-        source: 'sites',
-        paint: {
-          'circle-radius': 7,
-          'circle-color': '#34b3ff',
-          'circle-stroke-color': '#fff',
-          'circle-stroke-width': 1
-        }
-      });
-    });
-  }
+    renderSites();
+    addSiteLayers();
+    fitToData();
+  },
+  error: (err) => console.error('CSV load error', err)
 });
+
+function addSiteLayers(){
+  map.on('load', () => {
+    map.addSource('sites', { type:'geojson', data: sitesFC });
+
+    // Early Voting layer
+    map.addLayer({
+      id: 'sites-ev', type: 'circle', source: 'sites',
+      paint: { 'circle-radius': 7, 'circle-color': '#4ad97d', 'circle-stroke-width':1, 'circle-stroke-color':'#0b1020' },
+      filter:['==',['get','type'],'Early Voting']
+    });
+    // Election Day layer
+    map.addLayer({
+      id: 'sites-ed', type: 'circle', source: 'sites',
+      paint: { 'circle-radius': 7, 'circle-color': '#34b3ff', 'circle-stroke-width':1, 'circle-stroke-color':'#0b1020' },
+      filter:['==',['get','type'],'Election Day']
+    });
+
+    // Popup on click
+    map.on('click','sites-ev', (e)=> showPopup(e));
+    map.on('click','sites-ed', (e)=> showPopup(e));
+    map.on('mouseenter','sites-ev', ()=> map.getCanvas().style.cursor='pointer');
+    map.on('mouseenter','sites-ed', ()=> map.getCanvas().style.cursor='pointer');
+    map.on('mouseleave','sites-ev', ()=> map.getCanvas().style.cursor='');
+    map.on('mouseleave','sites-ed', ()=> map.getCanvas().style.cursor='');
+  });
+}
+
+function showPopup(e){
+  const f = e.features[0];
+  const p = f.properties;
+  const html = `
+    <strong>${p.name}</strong><br/>
+    ${p.address}${p.city?`, ${p.city}`:''} ${p.zip||''}<br/>
+    <span class="muted">${p.type}</span><br/>
+    ${p.hours?`<div style="margin-top:4px">Hours: ${p.hours}</div>`:''}
+    ${p.notes?`<div class="muted" style="margin-top:4px">${p.notes}</div>`:''}
+    ${voterPoint?`<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>`:''}
+    <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(p.address + (p.city?", "+p.city:"") + (p.zip?" "+p.zip:""))}">Get Directions</a></div>
+  `;
+  new mapboxgl.Popup({ offset: 12 }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+}
+
+function fitToData(){
+  if (!sitesFC.features.length) return;
+  const b = turf.bbox(sitesFC);
+  map.fitBounds(b, { padding: 40, maxZoom: 12 });
+}
+
+/**********************
+ * ADDRESS & FILTER UI *
+ **********************/
+const addrInput = document.getElementById('addr');
+document.getElementById('locate').onclick = ()=> locateAddress(addrInput.value);
+document.getElementById('clear').onclick = ()=> { addrInput.value=''; voterPoint=null; map.getSource('voter') && map.removeLayer('voter') && map.removeSource('voter'); renderSites(); };
+
+geocoder.on('result', (ev)=>{
+  const { center, place_name } = ev.result;
+  addrInput.value = place_name;
+  setVoterPoint(center[0], center[1]);
+});
+
+function locateAddress(text){
+  if (!text) return alert('Enter an address');
+  geocoder.query(text);
+}
+
+function setVoterPoint(lng, lat){
+  voterPoint = turf.point([lng, lat]);
+  const geo = { type:'FeatureCollection', features:[{ type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] } }] };
+  if (!map.getSource('voter')){
+    map.addSource('voter', { type:'geojson', data: geo });
+    map.addLayer({ id:'voter', type:'circle', source:'voter', paint:{ 'circle-radius':8,'circle-color':'#ffd166','circle-stroke-color':'#0b1020','circle-stroke-width':1 } });
+  } else {
+    map.getSource('voter').setData(geo);
+  }
+  map.flyTo({ center:[lng,lat], zoom: 12 });
+  renderSites();
+}
+
+const evChk = document.getElementById('filter-ev');
+const edChk = document.getElementById('filter-ed');
+evChk.onchange = edChk.onchange = ()=> renderSites();
+
+function filteredSites(){
+  let feats = sitesFC.features.slice();
+  if (!evChk.checked) feats = feats.filter(f => f.properties.type !== 'Early Voting');
+  if (!edChk.checked) feats = feats.filter(f => f.properties.type !== 'Election Day');
+  return feats;
+}
+
+function distanceFromVoter(feature){
+  if (!voterPoint) return null;
+  return turf.distance(voterPoint, feature, { units: 'miles' });
+}
+
+function formatDist(mi){
+  if (mi === null) return '';
+  return mi < 10 ? `${mi.toFixed(2)} mi` : `${mi.toFixed(1)} mi`;
+}
+
+function renderSites(){
+  const feats = filteredSites();
+  const list = document.getElementById('list');
+  const countEl = document.getElementById('count');
+  countEl.textContent = feats.length;
+
+  // Update map filters to match toggles
+  if (map.getLayer('sites-ev')) map.setLayoutProperty('sites-ev','visibility', evChk.checked ? 'visible':'none');
+  if (map.getLayer('sites-ed')) map.setLayoutProperty('sites-ed','visibility', edChk.checked ? 'visible':'none');
+
+  let sorted = feats;
+  if (voterPoint){
+    sorted = feats.slice().sort((a,b)=> distanceFromVoter(a) - distanceFromVoter(b));
+  }
+
+  list.innerHTML = '';
+  sorted.forEach(f => {
+    const p = f.properties;
+    const d = voterPoint ? formatDist(distanceFromVoter(f)) : '';
+    const el = document.createElement('div');
+    el.className = 'site';
+    el.innerHTML = `
+      <h3>${p.name}</h3>
+      <div>${p.address}${p.city?`, ${p.city}`:''} ${p.zip||''}</div>
+      <div class="muted">${p.type}${d?` · <span class="dist">${d}</span>`:''}</div>
+      ${p.hours?`<div>Hours: ${p.hours}</div>`:''}
+      ${p.accessible?`<div class="muted">Accessibility: ${p.accessible}</div>`:''}
+      ${p.notes?`<div class="muted">${p.notes}</div>`:''}
+      <div class="btn-row" style="margin-top:6px">
+        <a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(p.address + (p.city?", "+p.city:"") + (p.zip?" "+p.zip:""))}">Directions</a>
+        <button data-jump>Zoom</button>
+      </div>
+    `;
+    el.querySelector('button[data-jump]').onclick = ()=> {
+      map.flyTo({ center: f.geometry.coordinates, zoom: 14 });
+      new mapboxgl.Popup({ offset: 12 }).setLngLat(f.geometry.coordinates).setHTML(`
+        <strong>${p.name}</strong><br/>${p.address}${p.city?`, ${p.city}`:''} ${p.zip||''}<br/><span class='muted'>${p.type}</span>
+      `).addTo(map);
+    };
+    list.appendChild(el);
+  });
+}
 </script>
+
+<!--
+CSV TEMPLATE (save as sites.csv next to this file)
+name,address,city,zip,lat,lng,type,hours,start_date,end_date,accessible,notes
+Example Courthouse,100 N Main St,Yourtown,78111,29.5123,-98.4132,Early Voting,"M-F 8a-6p; Sat 9a-2p",2025-10-21,2025-10-31,Wheelchair ramp & curbside,
+Example HS Gym,1 Tiger Ln,Yourtown,78111,29.4888,-98.395,Election Day,7a-7p,2025-11-04,2025-11-04,Curbside available,
+-- remove this line and add all your sites --
+-->
 </body>
 </html>
