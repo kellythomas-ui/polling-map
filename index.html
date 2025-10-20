@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polling Place Finder</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
+  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.1.0/mapbox-gl-geocoder.css" type="text/css" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.1.0/mapbox-gl-geocoder.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    body{margin:0;font-family:system-ui;background:#0b1020;color:#fff}
+    #map{position:absolute;top:0;bottom:0;width:100%}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+const CONFIG = {
+  MAPBOX_TOKEN: "pk.eyJ1Ijoia2VsbGF0aG9tYXMiLCJhIjoiY21nemtreGM5MHNuYzJqcTRwMzUwaWNrcCJ9.OJKWNpnTc_iFxD2ARuwJ5Q",
+  DATA_URL: "sites.csv"
+};
+
+mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
+const map = new mapboxgl.Map({
+  container: 'map',
+  style: 'mapbox://styles/mapbox/streets-v12',
+  center: [-98.5, 29.4],
+  zoom: 8
+});
+
+Papa.parse(CONFIG.DATA_URL, {
+  download: true,
+  header: true,
+  dynamicTyping: true,
+  complete: (res) => {
+    const features = res.data.map(r => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [Number(r.lng), Number(r.lat)] },
+      properties: r
+    }));
+
+    map.on('load', () => {
+      map.addSource('sites', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+      map.addLayer({
+        id: 'sites',
+        type: 'circle',
+        source: 'sites',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#34b3ff',
+          'circle-stroke-color': '#fff',
+          'circle-stroke-width': 1
+        }
+      });
+    });
+  }
+});
+</script>
+</body>
+</html>
