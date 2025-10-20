@@ -168,37 +168,45 @@ geocoder.addTo(geocoderEl);
 let sitesFC = { type: 'FeatureCollection', features: [] };
 let voterPoint = null; // Turf point of voter address
 
-function initLayers(){
-  if (map.getSource('sites')) { map.getSource('sites').setData(sitesFC); return; }
-
-  map.addSource('sites', { type:'geojson', data: sitesFC });
-
-  // One unfiltered circle layer, color by type
-  map.addLayer({
-    id: 'sites-circles',
-    type: 'circle',
-    source: 'sites',
-    paint: {
-      'circle-radius': 8,
-      'circle-color': [
-        'match',
-        ['get','type'],
-        'Early Voting',   '#22c55e',   // green
-        'Election Day',   '#3b82f6',   // blue
-        'Both',           '#8b5cf6',   // purple
-        /* other/unexpected */         '#9ca3af'  // gray fallback
-      ],
-      'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 1.5,
-      'circle-opacity': 0.95
-    }
-  });
-
-  // Click/hover for popups
-  map.on('click', 'sites-circles', (e) => showPopup(e));
-  map.on('mouseenter', 'sites-circles', () => map.getCanvas().style.cursor = 'pointer');
-  map.on('mouseleave', 'sites-circles', () => map.getCanvas().style.cursor = '');
+// --- DOM Markers (bulletproof pins) ---
+let domMarkers = [];
+function clearMarkers(){
+  domMarkers.forEach(m => m.remove());
+  domMarkers = [];
 }
+function renderMarkers(){
+  const feats = filteredSites();
+  clearMarkers();
+  feats.forEach(f => {
+    const t = f.properties.type;
+    const color = (t === 'Early Voting') ? '#22c55e'
+                : (t === 'Election Day') ? '#3b82f6'
+                : /* Both */              '#8b5cf6';
+
+    const marker = new mapboxgl.Marker({ color })
+      .setLngLat(f.geometry.coordinates)
+      .addTo(map);
+
+    // Click -> show popup using existing function
+    marker.getElement().addEventListener('click', () => {
+      showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } });
+    });
+
+    domMarkers.push(marker);
+  });
+}
+
+function initLayers(){
+  // We don't rely on style layers for pins anymore (DOM markers handle it).
+  // Keeping a GeoJSON source available is harmless, but optional:
+  if (!map.getSource('sites')) {
+    map.addSource('sites', { type:'geojson', data: sitesFC });
+  } else {
+    map.getSource('sites').setData(sitesFC);
+  }
+}
+
+if (map.loaded()) { initLayers(); } else { map.on('load', initLayers); }
 
 // Load CSV (auto-detect delimiter, trim headers)
 Papa.parse(CONFIG.DATA_URL, {
@@ -213,9 +221,14 @@ Papa.parse(CONFIG.DATA_URL, {
       feats.push(f);
     });
     sitesFC.features = feats;
+
     if (map.getSource('sites')) map.getSource('sites').setData(sitesFC);
+    renderMarkers();   // <— draw reliable DOM markers
     renderSites();
     fitToData();
+
+    // Optional: quick console sanity check
+    // console.log('features loaded:', sitesFC.features.length, sitesFC.features.slice(0,3));
   },
   error: (err) => console.error('CSV load error', err)
 });
@@ -269,6 +282,7 @@ document.getElementById('locate').onclick = ()=> locateAddress(addrInput.value);
 document.getElementById('clear').onclick = ()=> {
   addrInput.value=''; voterPoint=null;
   if (map.getSource('voter')) { map.removeLayer('voter'); map.removeSource('voter'); }
+  renderMarkers();
   renderSites();
 };
 
@@ -285,12 +299,13 @@ function setVoterPoint(lng, lat){
     map.getSource('voter').setData(geo);
   }
   map.flyTo({ center:[lng,lat], zoom: 12 });
+  renderMarkers();
   renderSites();
 }
 
 const evChk = document.getElementById('filter-ev');
 const edChk = document.getElementById('filter-ed');
-evChk.onchange = edChk.onchange = ()=> renderSites();
+evChk.onchange = edChk.onchange = ()=> { renderMarkers(); renderSites(); };
 
 function filteredSites(){
   const feats = sitesFC.features.slice();
@@ -311,11 +326,6 @@ function formatDist(mi){ if (mi === null) return ''; return mi < 10 ? `${mi.toFi
 function renderSites(){
   const feats = filteredSites();
   const list = document.getElementById('list');
-
-  // Update map layer visibility
-  if (map.getLayer('sites-ev'))   map.setLayoutProperty('sites-ev','visibility', evChk.checked ? 'visible':'none');
-  if (map.getLayer('sites-ed'))   map.setLayoutProperty('sites-ed','visibility', edChk.checked ? 'visible':'none');
-  if (map.getLayer('sites-both')) map.setLayoutProperty('sites-both','visibility', (evChk.checked || edChk.checked) ? 'visible':'none');
 
   // Sort by distance if we have an address
   let sorted = feats;
