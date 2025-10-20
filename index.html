@@ -173,56 +173,32 @@ function initLayers(){
 
   map.addSource('sites', { type:'geojson', data: sitesFC });
 
-  // Early Voting (green)
+  // One unfiltered circle layer, color by type
   map.addLayer({
-    id: 'sites-ev',
+    id: 'sites-circles',
     type: 'circle',
     source: 'sites',
-    filter: ['==', ['get','type'], 'Early Voting'],
     paint: {
-      'circle-radius': 7,
-      'circle-color': '#22c55e',
+      'circle-radius': 8,
+      'circle-color': [
+        'match',
+        ['get','type'],
+        'Early Voting',   '#22c55e',   // green
+        'Election Day',   '#3b82f6',   // blue
+        'Both',           '#8b5cf6',   // purple
+        /* other/unexpected */         '#9ca3af'  // gray fallback
+      ],
       'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 1.25
+      'circle-stroke-width': 1.5,
+      'circle-opacity': 0.95
     }
   });
 
-  // Election Day (blue)
-  map.addLayer({
-    id: 'sites-ed',
-    type: 'circle',
-    source: 'sites',
-    filter: ['==', ['get','type'], 'Election Day'],
-    paint: {
-      'circle-radius': 7,
-      'circle-color': '#3b82f6',
-      'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 1.25
-    }
-  });
-
-  // Both (purple)
-  map.addLayer({
-    id: 'sites-both',
-    type: 'circle',
-    source: 'sites',
-    filter: ['==', ['get','type'], 'Both'],
-    paint: {
-      'circle-radius': 7,
-      'circle-color': '#8b5cf6',
-      'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 1.25
-    }
-  });
-
-  // Click handlers for popups
-  ['sites-ev','sites-ed','sites-both'].forEach(id => {
-    map.on('click', id, (e) => showPopup(e));
-    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
-    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
-  });
+  // Click/hover for popups
+  map.on('click', 'sites-circles', (e) => showPopup(e));
+  map.on('mouseenter', 'sites-circles', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'sites-circles', () => map.getCanvas().style.cursor = '');
 }
-
 
 // Load CSV (auto-detect delimiter, trim headers)
 Papa.parse(CONFIG.DATA_URL, {
