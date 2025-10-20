@@ -168,7 +168,7 @@ geocoder.addTo(geocoderEl);
 let sitesFC = { type: 'FeatureCollection', features: [] };
 let voterPoint = null; // Turf point of voter address
 
-// --- DOM Markers (bulletproof pins) ---
+// --- DOM Markers (reliable pins) ---
 let domMarkers = [];
 function clearMarkers(){
   domMarkers.forEach(m => m.remove());
@@ -187,28 +187,29 @@ function renderMarkers(){
       .setLngLat(f.geometry.coordinates)
       .addTo(map);
 
-    // Click -> show popup using existing function
+    // Use the flexible popup function (works for markers or layers)
     marker.getElement().addEventListener('click', () => {
-      showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } });
+      showPopup({
+        feature: f,
+        lngLat: { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
+      });
     });
 
     domMarkers.push(marker);
   });
 }
 
+// Optional: keep a GeoJSON source around (not required for markers)
 function initLayers(){
-  // We don't rely on style layers for pins anymore (DOM markers handle it).
-  // Keeping a GeoJSON source available is harmless, but optional:
   if (!map.getSource('sites')) {
     map.addSource('sites', { type:'geojson', data: sitesFC });
   } else {
     map.getSource('sites').setData(sitesFC);
   }
 }
-
 if (map.loaded()) { initLayers(); } else { map.on('load', initLayers); }
 
-// Load CSV (auto-detect delimiter, trim headers)
+// ===== DATA LOAD =====
 Papa.parse(CONFIG.DATA_URL, {
   download:true, header:true, dynamicTyping:true, skipEmptyLines:true,
   delimiter:"", transformHeader: h => String(h||'').trim(),
@@ -223,25 +224,41 @@ Papa.parse(CONFIG.DATA_URL, {
     sitesFC.features = feats;
 
     if (map.getSource('sites')) map.getSource('sites').setData(sitesFC);
-    renderMarkers();   // <— draw reliable DOM markers
+    renderMarkers();
     renderSites();
     fitToData();
-
-    // Optional: quick console sanity check
-    // console.log('features loaded:', sitesFC.features.length, sitesFC.features.slice(0,3));
   },
   error: (err) => console.error('CSV load error', err)
 });
 
-function showPopup(e){
-  const f = e.features[0];
-  const p = f.properties;
+// ===== POPUP (accepts marker clicks or layer clicks) =====
+function showPopup(input){
+  let f, lngLat;
+
+  if (input && input.type === 'Feature') {
+    // showPopup(feature)
+    f = input;
+    lngLat = { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] };
+  } else if (input && input.feature) {
+    // showPopup({ feature, lngLat })
+    f = input.feature;
+    lngLat = input.lngLat || { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] };
+  } else if (input && input.features && input.features[0]) {
+    // map layer click event
+    f = input.features[0];
+    lngLat = input.lngLat;
+  } else {
+    console.warn('showPopup called with unexpected input:', input);
+    return;
+  }
+
+  const p = f.properties || {};
   const name = p.name || 'Polling location';
-  const line2 = [(p.address||''),(p.city||''),(p.zip||'')]
-                  .filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
+  const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
 
   const hoursLines = [];
-  if (p.type === 'Both'){
+  const typeLower = (p.type || '').toLowerCase();
+  if (typeLower === 'both'){
     if (p.hoursEv) hoursLines.push(`<div>Early Voting: ${p.hoursEv}</div>`);
     if (p.hoursEd) hoursLines.push(`<div>Election Day: ${p.hoursEd}</div>`);
     if (!hoursLines.length && p.hoursGeneric) hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
@@ -251,25 +268,27 @@ function showPopup(e){
     hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
   }
 
+  const dist = (voterPoint) ? `<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>` : '';
   const notes = p.notes ? `<div class="muted" style="margin-top:4px">${p.notes}</div>` : '';
-  const dist  = voterPoint ? `<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>` : '';
   const dest  = encodeURIComponent(line2);
 
   const html = `
     <strong>${name}</strong><br/>
     ${line2 || ''}<br/>
-    <span class="muted">${p.type}</span>
+    <span class="muted">${p.type || ''}</span>
     ${hoursLines.length ? hoursLines.join('') : ''}
     ${notes}
     ${dist}
     <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Get Directions</a></div>
   `;
-  new mapboxgl.Popup({ offset: 12, className:'light-popup' })
-    .setLngLat(e.lngLat)
+
+  new mapboxgl.Popup({ offset: 12, className: 'light-popup' })
+    .setLngLat(lngLat)
     .setHTML(html)
     .addTo(map);
 }
 
+// ===== VIEW HELPERS =====
 function fitToData(){
   if (!sitesFC.features.length) return;
   const b = turf.bbox(sitesFC);
@@ -335,9 +354,8 @@ function renderSites(){
   const seen = new Set();
   sorted = sorted.filter(f => { const id = f.properties.id; if (seen.has(id)) return false; seen.add(id); return true; });
 
-  // Update count to reflect de-dup list length
-  const countEl = document.getElementById('count');
-  countEl.textContent = sorted.length;
+  // Update count
+  document.getElementById('count').textContent = sorted.length;
 
   list.innerHTML = '';
   sorted.forEach(f => {
@@ -367,7 +385,7 @@ function renderSites(){
     `;
     el.querySelector('button[data-jump]').onclick = ()=> {
       map.flyTo({ center: f.geometry.coordinates, zoom: 14 });
-      showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } });
+      showPopup({ feature: f, lngLat: { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] } });
     };
     list.appendChild(el);
   });
