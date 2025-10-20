@@ -170,9 +170,44 @@ let voterPoint = null; // Turf point of voter address
 
 // --- DOM Markers (reliable pins) ---
 let domMarkers = [];
+const markerById = new Map();
+
+function popupHTMLForFeature(f){
+  const p = f.properties || {};
+  const name = p.name || 'Polling location';
+  const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
+
+  const hoursLines = [];
+  const typeLower = (p.type || '').toLowerCase();
+  if (typeLower === 'both'){
+    if (p.hoursEv) hoursLines.push(`<div>Early Voting: ${p.hoursEv}</div>`);
+    if (p.hoursEd) hoursLines.push(`<div>Election Day: ${p.hoursEd}</div>`);
+    if (!hoursLines.length && p.hoursGeneric) hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
+  } else if (p.hours) {
+    hoursLines.push(`<div>Hours: ${p.hours}</div>`);
+  } else if (p.hoursGeneric) {
+    hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
+  }
+
+  const dist = voterPoint ? `<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>` : '';
+  const notes = p.notes ? `<div class="muted" style="margin-top:4px">${p.notes}</div>` : '';
+  const dest  = encodeURIComponent(line2);
+
+  return `
+    <strong>${name}</strong><br/>
+    ${line2 || ''}<br/>
+    <span class="muted">${p.type || ''}</span>
+    ${hoursLines.length ? hoursLines.join('') : ''}
+    ${notes}
+    ${dist}
+    <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Get Directions</a></div>
+  `;
+}
+
 function clearMarkers(){
   domMarkers.forEach(m => m.remove());
   domMarkers = [];
+  markerById.clear();
 }
 function renderMarkers(){
   const feats = filteredSites();
@@ -183,19 +218,16 @@ function renderMarkers(){
                 : (t === 'Election Day') ? '#3b82f6'
                 : /* Both */              '#8b5cf6';
 
+    const popup = new mapboxgl.Popup({ offset: 12, className: 'light-popup' })
+      .setHTML(popupHTMLForFeature(f));
+
     const marker = new mapboxgl.Marker({ color })
       .setLngLat(f.geometry.coordinates)
+      .setPopup(popup)    // ← attach popup; opens on click automatically
       .addTo(map);
 
-    // Use the flexible popup function (works for markers or layers)
-    marker.getElement().addEventListener('click', () => {
-      showPopup({
-        feature: f,
-        lngLat: { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }
-      });
-    });
-
     domMarkers.push(marker);
+    markerById.set(f.properties.id, marker);
   });
 }
 
@@ -230,63 +262,6 @@ Papa.parse(CONFIG.DATA_URL, {
   },
   error: (err) => console.error('CSV load error', err)
 });
-
-// ===== POPUP (accepts marker clicks or layer clicks) =====
-function showPopup(input){
-  let f, lngLat;
-
-  if (input && input.type === 'Feature') {
-    // showPopup(feature)
-    f = input;
-    lngLat = { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] };
-  } else if (input && input.feature) {
-    // showPopup({ feature, lngLat })
-    f = input.feature;
-    lngLat = input.lngLat || { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] };
-  } else if (input && input.features && input.features[0]) {
-    // map layer click event
-    f = input.features[0];
-    lngLat = input.lngLat;
-  } else {
-    console.warn('showPopup called with unexpected input:', input);
-    return;
-  }
-
-  const p = f.properties || {};
-  const name = p.name || 'Polling location';
-  const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
-
-  const hoursLines = [];
-  const typeLower = (p.type || '').toLowerCase();
-  if (typeLower === 'both'){
-    if (p.hoursEv) hoursLines.push(`<div>Early Voting: ${p.hoursEv}</div>`);
-    if (p.hoursEd) hoursLines.push(`<div>Election Day: ${p.hoursEd}</div>`);
-    if (!hoursLines.length && p.hoursGeneric) hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
-  } else if (p.hours) {
-    hoursLines.push(`<div>Hours: ${p.hours}</div>`);
-  } else if (p.hoursGeneric){
-    hoursLines.push(`<div>Hours: ${p.hoursGeneric}</div>`);
-  }
-
-  const dist = (voterPoint) ? `<div class="dist" style="margin-top:6px">Distance: ${formatDist(distanceFromVoter(f))}</div>` : '';
-  const notes = p.notes ? `<div class="muted" style="margin-top:4px">${p.notes}</div>` : '';
-  const dest  = encodeURIComponent(line2);
-
-  const html = `
-    <strong>${name}</strong><br/>
-    ${line2 || ''}<br/>
-    <span class="muted">${p.type || ''}</span>
-    ${hoursLines.length ? hoursLines.join('') : ''}
-    ${notes}
-    ${dist}
-    <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Get Directions</a></div>
-  `;
-
-  new mapboxgl.Popup({ offset: 12, className: 'light-popup' })
-    .setLngLat(lngLat)
-    .setHTML(html)
-    .addTo(map);
-}
 
 // ===== VIEW HELPERS =====
 function fitToData(){
@@ -385,7 +360,8 @@ function renderSites(){
     `;
     el.querySelector('button[data-jump]').onclick = ()=> {
       map.flyTo({ center: f.geometry.coordinates, zoom: 14 });
-      showPopup({ feature: f, lngLat: { lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] } });
+      const m = markerById.get(p.id);
+      if (m) m.togglePopup();
     };
     list.appendChild(el);
   });
