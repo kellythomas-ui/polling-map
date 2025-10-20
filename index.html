@@ -169,40 +169,60 @@ let sitesFC = { type: 'FeatureCollection', features: [] };
 let voterPoint = null; // Turf point of voter address
 
 function initLayers(){
-  if (map.getSource('sites')){ map.getSource('sites').setData(sitesFC); return; }
+  if (map.getSource('sites')) { map.getSource('sites').setData(sitesFC); return; }
+
   map.addSource('sites', { type:'geojson', data: sitesFC });
 
-  // EV pins
+  // Early Voting (green)
   map.addLayer({
-    id:'sites-ev', type:'symbol', source:'sites',
-    filter:['==',['get','type'],'Early Voting'],
-    layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
-    paint:{ 'icon-color':'#22c55e' }
+    id: 'sites-ev',
+    type: 'circle',
+    source: 'sites',
+    filter: ['==', ['get','type'], 'Early Voting'],
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#22c55e',
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.25
+    }
   });
 
-  // ED pins
+  // Election Day (blue)
   map.addLayer({
-    id:'sites-ed', type:'symbol', source:'sites',
-    filter:['==',['get','type'],'Election Day'],
-    layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
-    paint:{ 'icon-color':'#3b82f6' }
+    id: 'sites-ed',
+    type: 'circle',
+    source: 'sites',
+    filter: ['==', ['get','type'], 'Election Day'],
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#3b82f6',
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.25
+    }
   });
 
-  // BOTH pins (single pin when site serves both periods)
+  // Both (purple)
   map.addLayer({
-    id:'sites-both', type:'symbol', source:'sites',
-    filter:['==',['get','type'],'Both'],
-    layout:{ 'icon-image':'marker-15','icon-size':1.6,'icon-allow-overlap':true },
-    paint:{ 'icon-color':'#8b5cf6' } // purple
+    id: 'sites-both',
+    type: 'circle',
+    source: 'sites',
+    filter: ['==', ['get','type'], 'Both'],
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#8b5cf6',
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.25
+    }
   });
 
-  ['sites-ev','sites-ed','sites-both'].forEach(id=>{
-    map.on('click', id, (e)=> showPopup(e));
-    map.on('mouseenter', id, ()=> map.getCanvas().style.cursor='pointer');
-    map.on('mouseleave', id, ()=> map.getCanvas().style.cursor='');
+  // Click handlers for popups
+  ['sites-ev','sites-ed','sites-both'].forEach(id => {
+    map.on('click', id, (e) => showPopup(e));
+    map.on('mouseenter', id, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', id, () => map.getCanvas().style.cursor = '');
   });
 }
-if (map.loaded()) { initLayers(); } else { map.on('load', initLayers); }
+
 
 // Load CSV (auto-detect delimiter, trim headers)
 Papa.parse(CONFIG.DATA_URL, {
