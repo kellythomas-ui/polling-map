@@ -1,3 +1,6 @@
 site_name,addr,city,zipcode,lat,lng,type,hours_ev,hours_ed,start_date,end_date,notes
-Pat Bryson Municipal Hall,201 N Brushy St,Leander,78641,30.57935,-97.85455,early and e day,M-F 8a-6p; Sat 9a-2p,7-7,Oct 20,Nov 4,council chambers
-Cedar Park Recreation Center,1435 Main St,Cedar Park,78613,30.52695,-97.82585,early and e day,M-F 8a-6p; Sat 9a-2p,7-7,Oct 21,Nov 5,community room
+Pat Bryson Municipal Hall,201 N Brushy St,Leander,78641,30.57935,-97.85455,early and e day,M-F 8am-6pm; Sat 9am-2pm,7am-7pm,Oct 20,Nov 4,council chambers
+Cedar Park Recreation Center,1435 Main St,Cedar Park,78613,30.52695,-97.82585,early and e day,M-F 8am-6pm; Sat 9am-2pm,7am-7pm,Oct 21,Nov 5,community room
+First Baptist Church,10000 FM 2243,Leander,78641,30.58374,-97.84092,e day,,7am-7pm,Nov 4,Nov 4,Gymnasium
+ACC San Gabriel,449 San Gabriel Campus Dr.,Leander,78641,30.58801,-97.85039,e day,,7am-7pm,Nov 4,Nov 4,Multi-purpose Room
+Allen R Baca Center,301 W Bagdad Ave.,Round Rock,78664,30.50642,-97.68131,e day,,7am-7pm,Nov 4,Nov 4,"Building 2, Meeting Room 3"
