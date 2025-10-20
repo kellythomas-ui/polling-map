@@ -92,8 +92,192 @@
 </div>
 
 <script>
-// Map config and logic remain the same as before, just updating popup class
-// (Full script omitted for brevity)
+// ===== CONFIG =====
+const CONFIG = {
+  MAPBOX_TOKEN: "pk.eyJ1Ijoia2VsbGF0aG9tYXMiLCJhIjoiY21nemtreGM5MHNuYzJqcTRwMzUwaWNrcCJ9.OJKWNpnTc_iFxD2ARuwJ5Q",
+  DATA_URL: "sites.csv", // CSV file path in same folder
+};
+
+// ===== HELPERS: sanitize + column auto-detect + type normalization =====
+const COALESCE_KEYS = {
+  name: ["name","site_name","location","location_name","place","venue"],
+  address: ["address","addr","street","street_address"],
+  city: ["city","town"],
+  zip: ["zip","zipcode","zip_code","postal"],
+  lat: ["lat","latitude","y"],
+  lng: ["lng","lon","long","longitude","x"],
+  type: ["type","site_type","voting_type","mode"],
+  hours: ["hours","open_hours","times"],
+  hoursEv: ["hours_ev","ev_hours","early_hours","hours_early"],
+  hoursEd: ["hours_ed","ed_hours","eday_hours","hours_election_day"],
+  start: ["start_date","start","open_from"],
+  end: ["end_date","end","open_to"],
+  notes: ["notes","note","details","extra"]
+};
+
+function lowerKeys(obj){ const out = {}; for (const k in obj){ out[k.toLowerCase().trim()] = obj[k]; } return out; }
+function get(row, keys){ for (const k of keys){ const v = row[k]; if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim(); } return ''; }
+function normalizeType(raw){ const v = String(raw||'').toLowerCase(); const hasEarly=/(^|\b)(early|ev)(\b|$)/.test(v); const hasEDay=/(election\s*day|eday|e\s*day|^ed$)/.test(v); if (hasEarly&&hasEDay) return 'Both'; if (hasEarly) return 'Early Voting'; if (hasEDay) return 'Election Day'; return 'Election Day'; }
+
+function featureFromRow(r, id){
+  const row = lowerKeys(r);
+  const name = get(row, COALESCE_KEYS.name);
+  const address = get(row, COALESCE_KEYS.address);
+  const city = get(row, COALESCE_KEYS.city);
+  const zip = get(row, COALESCE_KEYS.zip);
+  const lat = parseFloat(get(row, COALESCE_KEYS.lat));
+  const lng = parseFloat(get(row, COALESCE_KEYS.lng));
+  const type = normalizeType(get(row, COALESCE_KEYS.type));
+  const hoursGeneric = get(row, COALESCE_KEYS.hours);
+  const hoursEv = get(row, COALESCE_KEYS.hoursEv);
+  const hoursEd = get(row, COALESCE_KEYS.hoursEd);
+  const start = get(row, COALESCE_KEYS.start);
+  const end = get(row, COALESCE_KEYS.end);
+  const notes = get(row, COALESCE_KEYS.notes);
+  if (isNaN(lat) || isNaN(lng)) return null;
+  return { type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] }, properties:{ id, name, address, city, zip, type, hoursGeneric, hoursEv, hoursEd, start, end, notes } };
+}
+
+// ===== MAP INIT =====
+mapboxgl.accessToken = CONFIG.MAPBOX_TOKEN;
+const map = new mapboxgl.Map({ container:'map', style:'mapbox://styles/mapbox/streets-v12', center:[-98.5,29.4], zoom:8 });
+map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+// Geocoder UI (Mapbox)
+const geocoder = new MapboxGeocoder({ accessToken: mapboxgl.accessToken, mapboxgl, marker:false, placeholder:'123 Main St, City, TX' });
+const geocoderEl = document.getElementById('geocoder');
+geocoder.addTo(geocoderEl);
+
+let sitesFC = { type: 'FeatureCollection', features: [] };
+let voterPoint = null; // Turf point of voter address
+
+function initLayers(){
+  if (map.getSource('sites')){ map.getSource('sites').setData(sitesFC); return; }
+  map.addSource('sites', { type:'geojson', data: sitesFC });
+  map.addLayer({ id:'sites-ev', type:'symbol', source:'sites', filter:['==',['get','type'],'Early Voting'], layout:{ 'icon-image':'marker-15','icon-size':1.2,'text-field':['get','name'],'text-size':12,'text-offset':[0,1.2],'text-anchor':'top' }, paint:{ 'text-color':'#002b49','text-halo-color':'#fff','text-halo-width':1 } });
+  map.addLayer({ id:'sites-ed', type:'symbol', source:'sites', filter:['==',['get','type'],'Election Day'], layout:{ 'icon-image':'marker-15','icon-size':1.2,'text-field':['get','name'],'text-size':12,'text-offset':[0,1.2],'text-anchor':'top' }, paint:{ 'text-color':'#002b49','text-halo-color':'#fff','text-halo-width':1 } });
+  map.on('click','sites-ev', (e)=> showPopup(e));
+  map.on('click','sites-ed', (e)=> showPopup(e));
+  map.on('mouseenter','sites-ev', ()=> map.getCanvas().style.cursor='pointer');
+  map.on('mouseenter','sites-ed', ()=> map.getCanvas().style.cursor='pointer');
+  map.on('mouseleave','sites-ev', ()=> map.getCanvas().style.cursor='');
+  map.on('mouseleave','sites-ed', ()=> map.getCanvas().style.cursor='');
+}
+if (map.loaded()) { initLayers(); } else { map.on('load', initLayers); }
+
+// Load CSV (auto-detect delimiter, trim headers)
+Papa.parse(CONFIG.DATA_URL, {
+  download:true, header:true, dynamicTyping:true, skipEmptyLines:true,
+  delimiter:"", transformHeader: h => String(h||'').trim(),
+  complete: (res) => {
+    const feats = [];
+    (res.data||[]).forEach((r,i)=>{
+      const base = featureFromRow(r, i+1);
+      if (!base) return;
+      const p = base.properties;
+      const makeWithHours = (type)=>{
+        const f = JSON.parse(JSON.stringify(base));
+        f.properties.type = type;
+        if (type === 'Early Voting' && p.hoursEv){ f.properties.hours = p.hoursEv; }
+        else if (type === 'Election Day' && p.hoursEd){ f.properties.hours = p.hoursEd; }
+        else { f.properties.hours = p.hoursGeneric; }
+        return f;
+      };
+      if (p.type === 'Both'){
+        feats.push(makeWithHours('Early Voting'));
+        feats.push(makeWithHours('Election Day'));
+      } else {
+        feats.push(makeWithHours(p.type));
+      }
+    });
+    sitesFC.features = feats;
+    if (map.getSource('sites')) map.getSource('sites').setData(sitesFC);
+    renderSites();
+    fitToData();
+  },
+  error: (err) => console.error('CSV load error', err)
+});
+
+function showPopup(e){
+  const f = e.features[0];
+  const p = f.properties;
+  const name = p.name || 'Polling location';
+  const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ').replace(/,\s*,/g, ', ');
+  const typeLabel = p.type || '';
+  const hours = p.hours ? `Hours: ${p.hours}` : '';
+  const notes = p.notes ? p.notes : '';
+  const dist = voterPoint ? `Distance: ${formatDist(distanceFromVoter(f))}` : '';
+  const dest = encodeURIComponent([(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', '));
+  const html = `
+    <strong>${name}</strong><br/>
+    ${line2 || ''}<br/>
+    <span class="muted">${typeLabel}</span><br/>
+    ${hours ? `<div style="margin-top:4px">${hours}</div>`:''}
+    ${notes ? `<div class="muted" style="margin-top:4px">${notes}</div>`:''}
+    ${dist ? `<div class="dist" style="margin-top:6px">${dist}</div>`:''}
+    <div style="margin-top:8px"><a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${dest}">Get Directions</a></div>
+  `;
+  new mapboxgl.Popup({ offset: 12, className:'light-popup' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+}
+
+function fitToData(){ if (!sitesFC.features.length) return; const b = turf.bbox(sitesFC); map.fitBounds(b, { padding: 40, maxZoom: 12 }); }
+
+// ===== ADDRESS & FILTER UI =====
+const addrInput = document.getElementById('addr');
+document.getElementById('locate').onclick = ()=> locateAddress(addrInput.value);
+document.getElementById('clear').onclick = ()=> { addrInput.value=''; voterPoint=null; if (map.getSource('voter')) { map.removeLayer('voter'); map.removeSource('voter'); } renderSites(); };
+
+geocoder.on('result', (ev)=>{ const { center, place_name } = ev.result; addrInput.value = place_name; setVoterPoint(center[0], center[1]); });
+function locateAddress(text){ if (!text) return alert('Enter an address'); geocoder.query(text); }
+function setVoterPoint(lng, lat){ voterPoint = turf.point([lng, lat]); const geo={ type:'FeatureCollection', features:[{ type:'Feature', geometry:{ type:'Point', coordinates:[lng,lat] } }] }; if (!map.getSource('voter')){ map.addSource('voter',{ type:'geojson', data:geo }); map.addLayer({ id:'voter', type:'circle', source:'voter', paint:{ 'circle-radius':8,'circle-color':'#ffd166','circle-stroke-color':'#0b1020','circle-stroke-width':1 } }); } else { map.getSource('voter').setData(geo); } map.flyTo({ center:[lng,lat], zoom: 12 }); renderSites(); }
+
+const evChk = document.getElementById('filter-ev');
+const edChk = document.getElementById('filter-ed');
+evChk.onchange = edChk.onchange = ()=> renderSites();
+
+function filteredSites(){ let feats = sitesFC.features.slice(); if (!evChk.checked) feats = feats.filter(f => f.properties.type !== 'Early Voting'); if (!edChk.checked) feats = feats.filter(f => f.properties.type !== 'Election Day'); return feats; }
+function distanceFromVoter(feature){ if (!voterPoint) return null; return turf.distance(voterPoint, feature, { units: 'miles' }); }
+function formatDist(mi){ if (mi === null) return ''; return mi < 10 ? `${mi.toFixed(2)} mi` : `${mi.toFixed(1)} mi`; }
+
+function renderSites(){
+  const feats = filteredSites();
+  const list = document.getElementById('list');
+  const countEl = document.getElementById('count');
+  countEl.textContent = feats.length;
+
+  if (map.getLayer('sites-ev')) map.setLayoutProperty('sites-ev','visibility', evChk.checked ? 'visible':'none');
+  if (map.getLayer('sites-ed')) map.setLayoutProperty('sites-ed','visibility', edChk.checked ? 'visible':'none');
+
+  let sorted = feats; if (voterPoint){ sorted = feats.slice().sort((a,b)=> distanceFromVoter(a) - distanceFromVoter(b)); }
+
+  list.innerHTML = '';
+  sorted.forEach(f => {
+    const p = f.properties;
+    const d = voterPoint ? formatDist(distanceFromVoter(f)) : '';
+    const line2 = [(p.address||''),(p.city||''),(p.zip||'')].filter(Boolean).join(', ');
+    const el = document.createElement('div'); el.className = 'site';
+    el.innerHTML = `
+      <h3>${p.name || 'Polling location'}</h3>
+      <div>${line2}</div>
+      <div class="muted">${p.type}${d?` · <span class="dist">${d}</span>`:''}</div>
+      ${p.hours?`<div>Hours: ${p.hours}</div>`:''}
+      ${p.notes?`<div class="muted">${p.notes}</div>`:''}
+      <div class="btn-row" style="margin-top:6px">
+        <a class="btn" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(line2)}">Directions</a>
+        <button data-jump>Zoom</button>
+      </div>
+    `;
+    el.querySelector('button[data-jump]').onclick = ()=> { map.flyTo({ center: f.geometry.coordinates, zoom: 14 }); showPopup({ features:[f], lngLat:{ lng:f.geometry.coordinates[0], lat:f.geometry.coordinates[1] } }); };
+    list.appendChild(el);
+  });
+}
 </script>
+
+<!--
+CSV TIP: For sites open both periods, add optional columns:
+- hours_ev (or ev_hours, early_hours)
+- hours_ed (or ed_hours, eday_hours)
+Keep a generic 'hours' column for sites with a single period.
+-->
 </body>
 </html>
